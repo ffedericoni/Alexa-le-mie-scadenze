@@ -15,11 +15,22 @@ from ask_sdk_model.request_envelope import RequestEnvelope
 from ask_sdk_model.session import Session
 from ask_sdk_core.attributes_manager import (
     AttributesManager, AttributesManagerException)
+from partition_keygen import user_id_partition_keygen
 
 skill_name = "Le mie scadenze"
 help_text = ("Ciao. Puoi dire: aggiungi latte con scadenza 5 Agosto")
+#import os
+#os.environ["AWS_ACCESS_KEY_ID"] = "AKIASYK335I6I2AXN6YS"
+#os.environ["AWS_SECRET_ACCESS_KEY"] = "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"
 
-sb = StandardSkillBuilder()
+import boto3
+dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
+#dynamodb = boto3.client('dynamodb', region_name='eu-west-1')
+
+sb = StandardSkillBuilder(table_name="scadenze",
+		auto_create_table=True,
+		partition_keygen=user_id_partition_keygen, 
+		dynamodb_client=dynamodb)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
