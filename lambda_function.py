@@ -8,6 +8,7 @@ from ask_sdk_core.skill_builder import SkillBuilder
 from ask_sdk_core.utils import is_request_type, is_intent_name
 from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model import Response
+from ask_sdk_model import IntentConfirmationStatus
 from ask_sdk_model.ui import SimpleCard
 #added from test_attributes_manager.py
 from ask_sdk.standard import  StandardSkillBuilder
@@ -15,19 +16,23 @@ from ask_sdk_model.request_envelope import RequestEnvelope
 from ask_sdk_model.session import Session
 from ask_sdk_core.attributes_manager import (
     AttributesManager, AttributesManagerException)
+from ask_sdk_core.exceptions import AttributesManagerException
 from partition_keygen import user_id_partition_keygen
+
+from datetime import date
 
 skill_name = "Le mie scadenze"
 help_text = ("Ciao. Puoi dire: aggiungi latte con scadenza 5 Agosto")
-#import os
-#os.environ["AWS_ACCESS_KEY_ID"] = ""
-#os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+
+sample_saved_attributes = {'4': {'expiration': '2019-08-03', 'object': 'latte'}, 
+                           '5': {'expiration': '2019-08-04', 'object': 'vino'}, 
+                           '3': {'expiration': '2019-08-05', 'object': 'acqua'}}
 
 import boto3
 dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
 #dynamodb = boto3.client('dynamodb', region_name='eu-west-1')
 
-sb = StandardSkillBuilder(table_name="scadenze",
+sb = StandardSkillBuilder(table_name="Scadenze",
 		auto_create_table=True,
 		partition_keygen=user_id_partition_keygen, 
 		dynamodb_client=dynamodb)
@@ -93,10 +98,40 @@ def AddFoodIntent_handler(handler_input):
     # type: (HandlerInput) -> Response
 
     logger.info("In AddFoodIntent")
-    attr = handler_input.attributes_manager.session_attributes
+#    attr = handler_input.attributes_manager.session_attributes
     slots = handler_input.request_envelope.request.intent.slots
     food = slots[FOOD_SLOT].value
     date = slots[DATE_SLOT].value
+    attributesManager = handler_input.attributes_manager
+    newdata = {
+            "object": food,
+            "expiration": date
+              }
+    logger.info("Before getting persistent attributes")
+    try:
+        saved_attr = attributesManager.persistent_attributes
+        logger.info(saved_attr)
+        if saved_attr == {}:
+            newid = "1"
+        else:
+            maxid = max(saved_attr.keys())
+            newid = str(int(maxid) + 1)
+    except AttributesManagerException:
+        logger.info("Persistent Adapter is not defined")
+    except:
+        newid = "1"
+    logger.info("After getting persistent attributes")
+    logger.info(newid)
+#TODO clean expired entries before saving
+#TODO develop an Interceptor to cache data
+    newpersdata =  { newid: newdata }
+    logger.info("Newpersdata=")
+    logger.info(newpersdata)
+    pers_attr = { **saved_attr, **newpersdata }
+    attributesManager.persistent_attributes = pers_attr
+    logger.info("Added Newpersdata to existing persistent attributes")
+    attributesManager.save_persistent_attributes()
+
     logger.info(slots)
     speech = "Aggiungo " + food + " con data di scadenza " + date
     handler_input.response_builder.set_should_end_session(True)
@@ -104,27 +139,76 @@ def AddFoodIntent_handler(handler_input):
     return handler_input.response_builder.response
 
 @sb.request_handler(can_handle_func=is_intent_name("listExpirations"))
-def AddFoodIntent_handler(handler_input):
+def listExpirationsIntent_handler(handler_input):
     """Elenca gli oggetti in lista con relativa data di scadenza
     """
     # type: (HandlerInput) -> Response
     logger.info("In listExpirations")
-    attr = handler_input.attributes_manager.session_attributes
-    logger.info(attr)
-    speech = "Quando sara pronta elenchera gli oggetti in lista con relativa data di scadenza"
+    attributesManager = handler_input.attributes_manager
+    try:
+        saved_attr = attributesManager.persistent_attributes
+    except AttributesManagerException:
+        logger.info("Persistent Adapter is not defined")
+    logger.info("After getting persistent attributes")
+    if saved_attr == {}:
+        speech = "Lista vuota."
+    else:
+        speech=""
+        for k in saved_attr.keys():
+            speech += saved_attr[k]['object']+" scadra' il giorno "+saved_attr[k]['expiration']+". "
+            
+#    speech = "Quando sara' pronta elenchera gli oggetti in lista con relativa data di scadenza"
+    handler_input.response_builder.set_should_end_session(True)
+    handler_input.response_builder.speak(speech)
+    return handler_input.response_builder.response
+
+@sb.request_handler(can_handle_func=is_intent_name("deleteExpirations"))
+def deleteExpirationsIntent_handler(handler_input):
+    """Cancella tutti gli oggetti nella lista di scadenza se l'utente conferma.
+    """
+    # type: (HandlerInput) -> Response
+    logger.info("In deleteExpirations")
+    confirmationStatus = handler_input.request_envelope.request.intent.confirmation_status
+    logger.info(confirmationStatus)
+#    confirmationStatus = intent["confirmationStatus"]
+    if confirmationStatus == IntentConfirmationStatus.DENIED:
+        speech = "OK, non cancello nulla"
+    else:
+        handler_input.attributes_manager.delete_persistent_attributes()
+        speech = "Ho cancellato tutte le scadenze in lista"
     handler_input.response_builder.set_should_end_session(True)
     handler_input.response_builder.speak(speech)
     return handler_input.response_builder.response
 
 @sb.request_handler(can_handle_func=is_intent_name("nextExpiration"))
-def AddFoodIntent_handler(handler_input):
+def nextExpirationIntent_handler(handler_input):
     """Comunica l'oggetto di piu prossima scadenza                 
     """
     # type: (HandlerInput) -> Response
     logger.info("In nextExpiration")
-    attr = handler_input.attributes_manager.session_attributes
-    logger.info(attr)
-    speech = "Quando sara pronta comunichera l'oggetto di prossima scadenza"
+    attributesManager = handler_input.attributes_manager
+    try:
+        saved_attr = attributesManager.persistent_attributes
+    except AttributesManagerException:
+        logger.info("Persistent Adapter is not defined")
+    logger.info(saved_attr)
+    if saved_attr == {}:
+        speech = "Lista vuota."
+    else:
+        today = date.today().isoformat()
+        next_expiration = '2999-01-01'
+        next_object = ''
+        for k in saved_attr.keys():
+            expir = saved_attr[k]['expiration']
+            if  expir >= today and expir < next_expiration:
+                next_expiration = expir
+                next_object = saved_attr[k]['object']
+        if next_object == '':
+            speech = "Nessuna scadenza nel futuro."
+        else:
+            speech = next_object+" scadra' il giorno "+next_expiration+". "
+    
+#    speech = "Quando sara pronta comunichera l'oggetto di prossima scadenza"
     handler_input.response_builder.set_should_end_session(True)
     handler_input.response_builder.speak(speech)
     return handler_input.response_builder.response
