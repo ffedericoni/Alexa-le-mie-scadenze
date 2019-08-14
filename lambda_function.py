@@ -10,6 +10,10 @@ from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model import Response
 from ask_sdk_model import IntentConfirmationStatus
 from ask_sdk_model.ui import SimpleCard
+#from ask_sdk_core.api_client import DefaultApiClient
+from ask_sdk_model.services.reminder_management import (
+    ReminderRequest, Trigger, TriggerType, AlertInfo, PushNotification,
+    PushNotificationStatus, ReminderResponse, SpokenInfo, SpokenText)
 #added from test_attributes_manager.py
 from ask_sdk.standard import  StandardSkillBuilder
 from ask_sdk_model.request_envelope import RequestEnvelope
@@ -19,7 +23,7 @@ from ask_sdk_core.attributes_manager import (
 from ask_sdk_core.exceptions import AttributesManagerException
 from partition_keygen import user_id_partition_keygen
 
-from datetime import date
+from datetime import date, datetime
 
 skill_name = "Le mie scadenze"
 help_text = ("Ciao. Puoi dire: aggiungi latte con scadenza 5 Agosto")
@@ -46,13 +50,15 @@ welcome_speech =  {
 		}
 FOOD_SLOT = "food"
 DATE_SLOT = "date"
+NOTIFY_MISSING_PERMISSIONS = ("Please enable Reminders permissions in "
+                              "the Amazon Alexa app.")
+
 
 @sb.request_handler(can_handle_func=is_request_type("LaunchRequest"))
 def launch_request_handler(handler_input):
     """Handler for Skill Launch."""
     # type: (HandlerInput) -> Response
     logger.info("In LaunchRequestHandler")
-
     lang = handler_input.request_envelope.request.locale
     try:
         speech = welcome_speech[lang]
@@ -124,6 +130,7 @@ def AddFoodIntent_handler(handler_input):
     logger.info(newid)
 #TODO clean expired entries before saving
 #TODO develop an Interceptor to cache data
+#TODO Lettere accentate
     newpersdata =  { newid: newdata }
     logger.info("Newpersdata=")
     logger.info(newpersdata)
@@ -131,8 +138,41 @@ def AddFoodIntent_handler(handler_input):
     attributesManager.persistent_attributes = pers_attr
     logger.info("Added Newpersdata to existing persistent attributes")
     attributesManager.save_persistent_attributes()
+#TODO set a reminder
+    #check permissions for the Reminder
+    permissions = ["alexa::alerts:reminders:skill:readwrite"]
+    req_envelope = handler_input.request_envelope
+    response_builder = handler_input.response_builder
+    # Check if user gave permissions to create reminders.
+    # If not, request to provide permissions to the skill.
+    if not (req_envelope.context.system.user.permissions and
+            req_envelope.context.system.user.permissions.consent_token):
+        response_builder.speak(NOTIFY_MISSING_PERMISSIONS)
+        response_builder.set_card(
+            AskForPermissionsConsentCard(permissions=permissions))
+        return response_builder.response
 
-    logger.info(slots)
+    reminder_client = handler_input.service_client_factory.get_reminder_management_service()
+
+    #build alert and trigger for the Reminder Request
+    reminder_date = datetime.strptime(date, "%Y-%m-%d")
+    reminder_date = reminder_date.replace(hour=13, minute=0)
+#TODO manage locale language
+    text = SpokenText(locale=None, ssml=None, text='Per favore, autorizza i promemoria')
+    alert = AlertInfo(spoken_info=SpokenInfo([text]))
+    trigger = Trigger(object_type=TriggerType.SCHEDULED_ABSOLUTE, 
+                      scheduled_time=reminder_date,
+                      offset_in_seconds=None, 
+                      time_zone_id=None, 
+                      recurrence=None)
+    reminder_request = ReminderRequest(request_time=datetime.now(),
+                                       trigger=trigger, 
+                                       alert_info=alert, 
+                                       push_notification=PushNotification(PushNotificationStatus.ENABLED)
+                                       )
+    api_client = handler_input.service_client_factory.get_reminder_management_service()
+    response = api_client.create_reminder(reminder_request, **kwargs)
+
     speech = "Aggiungo " + food + " con data di scadenza " + date
     handler_input.response_builder.set_should_end_session(True)
     handler_input.response_builder.speak(speech)
@@ -151,7 +191,7 @@ def listExpirationsIntent_handler(handler_input):
         logger.info("Persistent Adapter is not defined")
     logger.info("After getting persistent attributes")
     if saved_attr == {}:
-        speech = "Lista vuota."
+        speech = "La lista e' vuota."
     else:
         speech=""
         for k in saved_attr.keys():
