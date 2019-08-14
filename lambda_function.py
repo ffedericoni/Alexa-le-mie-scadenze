@@ -10,6 +10,7 @@ from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model import Response
 from ask_sdk_model import IntentConfirmationStatus
 from ask_sdk_model.ui import SimpleCard
+from ask_sdk_model.ui import AskForPermissionsConsentCard
 #from ask_sdk_core.api_client import DefaultApiClient
 from ask_sdk_model.services.reminder_management import (
     ReminderRequest, Trigger, TriggerType, AlertInfo, PushNotification,
@@ -20,7 +21,8 @@ from ask_sdk_model.request_envelope import RequestEnvelope
 from ask_sdk_model.session import Session
 from ask_sdk_core.attributes_manager import (
     AttributesManager, AttributesManagerException)
-from ask_sdk_core.exceptions import AttributesManagerException
+from ask_sdk_model.services import ServiceException
+
 from partition_keygen import user_id_partition_keygen
 
 from datetime import date, datetime
@@ -152,7 +154,6 @@ def AddFoodIntent_handler(handler_input):
             AskForPermissionsConsentCard(permissions=permissions))
         return response_builder.response
 
-    reminder_client = handler_input.service_client_factory.get_reminder_management_service()
 
     #build alert and trigger for the Reminder Request
     reminder_date = datetime.strptime(date, "%Y-%m-%d")
@@ -171,8 +172,21 @@ def AddFoodIntent_handler(handler_input):
                                        push_notification=PushNotification(PushNotificationStatus.ENABLED)
                                        )
     api_client = handler_input.service_client_factory.get_reminder_management_service()
-    response = api_client.create_reminder(reminder_request, **kwargs)
-
+    #Create Reminder
+    try:
+        response = api_client.create_reminder(reminder_request)
+        speech = "Ho messo un promemoria alle ore tredici della data di scadenza."
+        logger.info(f"Created reminder : {response}")
+        return handler_input.response_builder.speak(speech).set_card(
+            SimpleCard(
+                "Reminder created with id", response.alert_token)).response
+    except ServiceException as e:
+        logger.info("Exception encountered : {}".format(e.body))
+        speech_text = "Uh Oh. Looks like something went wrong."
+        return handler_input.response_builder.speak(speech_text).set_card(
+            SimpleCard(
+                "Reminder not created",str(e.body))).response
+#TODO review after new code for Reminder
     speech = "Aggiungo " + food + " con data di scadenza " + date
     handler_input.response_builder.set_should_end_session(True)
     handler_input.response_builder.speak(speech)
